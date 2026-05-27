@@ -108,8 +108,16 @@ class IntentEngine:
         raw: str,
     ) -> dict:
 
+        # Strip markdown code fences (```json ... ``` or ``` ... ```)
+        # that LLMs frequently add around JSON output.
+        text = raw.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1]  # drop opening fence line
+            text = text.rsplit("```", 1)[0]  # drop closing fence
+            text = text.strip()
+
         try:
-            return json.loads(raw)
+            return json.loads(text)
 
         except Exception as e:
             self.logger.error(
