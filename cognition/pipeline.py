@@ -1,7 +1,10 @@
+import uuid
+
 from cognition.intent_engine import IntentEngine
 from cognition.decomposition_engine import DecompositionEngine
 from cognition.reflection_engine import ReflectionEngine
 from cognition.decision_ledger import DecisionLedger
+from cognition.cognition_record import CognitionRecord
 
 
 GHOSTMIND_SYSTEM_PROMPT = """You are GhostMind — the reasoning core of Mini Von, an autonomous AI assistant.
@@ -232,23 +235,27 @@ class CognitionPipeline:
 
         try:
 
-            await self.decision_ledger.store_record(
-                {
-                    "user_input": user_input,
-                    "response": response,
-                    "intent_analysis": vars(intent_analysis),
-                    "decomposition": (
-                        vars(decomposition)
-                        if decomposition
-                        else None
-                    ),
-                    "reflection": (
-                        vars(reflection)
-                        if reflection
-                        else None
-                    ),
-                }
+            record = CognitionRecord(
+                conversation_id=str(uuid.uuid4()),
+                user_input=user_input,
+                final_response=response,
+                intent_analysis=vars(intent_analysis),
+                decomposition=(
+                    vars(decomposition)
+                    if decomposition
+                    else {}
+                ),
+                execution_plan={},
+                reflection=(
+                    vars(reflection)
+                    if reflection
+                    else {}
+                ),
+                success=True,
+                error=None,
             )
+
+            await self.decision_ledger.store_record(record)
 
         except Exception as e:
 
