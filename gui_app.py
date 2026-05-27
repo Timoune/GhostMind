@@ -196,7 +196,7 @@ class GhostMindGUI(ctk.CTk):
         )
 
         try:
-            response = future.result()
+            response = future.result(timeout=120)
 
         except Exception as e:
             response = f"[ERROR]\n{e}"
@@ -269,10 +269,16 @@ class GhostMindGUI(ctk.CTk):
             async def stop_runtime():
                 await self.runtime.stop()
 
-            asyncio.run_coroutine_threadsafe(
+            # Block until the runtime has shut down cleanly so aiohttp
+            # sessions are closed before the window is destroyed.
+            future = asyncio.run_coroutine_threadsafe(
                 stop_runtime(),
                 self.loop
             )
+            try:
+                future.result(timeout=10)
+            except Exception:
+                pass  # best-effort shutdown
 
         self.destroy()
 
