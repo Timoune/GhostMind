@@ -1,0 +1,6 @@
+models:
+  backend: llama.cpp
+  endpoint: http://127.0.0.1:8080
+  timeout_seconds: 300   # 5 minutes — local models can be slow on first token
+  temperature: 0.7
+  max_tokens: 1024

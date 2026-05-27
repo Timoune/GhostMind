@@ -1,0 +1,4 @@
+safety:
+  max_recursion_depth: 3
+  execution_enabled: false
+  autonomous_mode: false

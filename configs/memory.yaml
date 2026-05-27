@@ -1,0 +1,13 @@
+memory:
+  backend: DreamCloudV12
+
+  api:
+    enabled: true
+    host: 127.0.0.1
+    port: 8000
+
+  retrieval:
+    top_k: 5
+
+  working_memory:
+    max_items: 20

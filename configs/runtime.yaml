@@ -1,0 +1,16 @@
+system:
+  name: GhostMind
+  version: 0.1
+
+runtime:
+  debug: true
+  max_workers: 4
+  event_queue_size: 1000
+
+logging:
+  level: INFO
+  log_dir: logs/
+
+heartbeat:
+  enabled: true
+  interval_seconds: 5
