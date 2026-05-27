@@ -1,5 +1,0 @@
-cognition:
-  reasoning_enabled: true
-  reflection_enabled: true
-  planning_enabled: true
-  max_reasoning_depth: 5
