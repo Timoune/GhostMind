@@ -146,8 +146,16 @@ class ReflectionEngine:
         raw: str,
     ) -> dict:
 
+        # Strip markdown code fences (```json ... ``` or ``` ... ```)
+        # that LLMs frequently add around JSON output.
+        text = raw.strip()
+        if text.startswith("```"):
+            text = text.split("\n", 1)[-1]
+            text = text.rsplit("```", 1)[0]
+            text = text.strip()
+
         try:
-            return json.loads(raw)
+            return json.loads(text)
 
         except Exception as e:
 
