@@ -4,6 +4,7 @@
 # =========================================================
 
 import asyncio
+import concurrent.futures
 import threading
 import tkinter as tk
 import customtkinter as ctk
@@ -42,6 +43,18 @@ class GhostMindGUI(ctk.CTk):
         self.runtime = None
         self.loop = None
 
+        # Loading animation state
+        self._loading_active = False
+        self._loading_frame = None
+        self._loading_label = None
+        self._loading_anim_id = None
+
+        # Stop / cancellation state
+        self._current_future = None   # concurrent.futures.Future for active think()
+        self._current_prompt = ""     # original prompt text (restored on Refine)
+        self._stop_mode = None        # "clear" | "refine" | None
+
+        # row 0 = chat, row 1 = stop bar (hidden), row 2 = input bar
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
@@ -57,6 +70,7 @@ class GhostMindGUI(ctk.CTk):
 
     def _build_ui(self):
 
+        # ââ Chat area ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
         self.chat_frame = ctk.CTkScrollableFrame(
             self,
             fg_color="#151515"
@@ -70,6 +84,49 @@ class GhostMindGUI(ctk.CTk):
             pady=10
         )
 
+        # ââ Stop bar (row 1, hidden until generation starts) ââââââââââââââââââ
+        self.stop_bar = ctk.CTkFrame(
+            self,
+            fg_color="#0e0e0e",
+            corner_radius=8,
+            height=44
+        )
+        # Not gridded yet â shown/hidden dynamically
+
+        self.stop_bar.grid_columnconfigure(0, weight=1)
+
+        _stop_inner = ctk.CTkFrame(self.stop_bar, fg_color="transparent")
+        _stop_inner.grid(row=0, column=0, sticky="e", padx=10, pady=6)
+
+        self.stop_clear_btn = ctk.CTkButton(
+            _stop_inner,
+            text="â¹  Stop",
+            width=110,
+            height=30,
+            fg_color="#2a0f0f",
+            hover_color="#4a1a1a",
+            text_color="#ff7070",
+            font=("Segoe UI", 11, "bold"),
+            corner_radius=6,
+            command=lambda: self._stop_generation("clear")
+        )
+        self.stop_clear_btn.pack(side="left", padx=(0, 8))
+
+        self.stop_refine_btn = ctk.CTkButton(
+            _stop_inner,
+            text="â  Refine Prompt",
+            width=148,
+            height=30,
+            fg_color="#0f1e2a",
+            hover_color="#1a3044",
+            text_color="#8ecfff",
+            font=("Segoe UI", 11, "bold"),
+            corner_radius=6,
+            command=lambda: self._stop_generation("refine")
+        )
+        self.stop_refine_btn.pack(side="left")
+
+        # ââ Input bar (row 2) ââââââââââââââââââââââââââââââââââââââââââââââââââ
         self.bottom_frame = ctk.CTkFrame(
             self,
             fg_color="#111111",
@@ -77,7 +134,7 @@ class GhostMindGUI(ctk.CTk):
         )
 
         self.bottom_frame.grid(
-            row=1,
+            row=2,
             column=0,
             sticky="ew",
             padx=10,
@@ -167,7 +224,14 @@ class GhostMindGUI(ctk.CTk):
         if not text:
             return
 
+        self._current_prompt = text
+        self._stop_mode = None
+
         self.input_box.delete("1.0", "end")
+
+        # Disable input controls while waiting for response
+        self.input_box.configure(state="disabled")
+        self.send_button.configure(state="disabled")
 
         self._append_message(
             "USER",
@@ -175,12 +239,14 @@ class GhostMindGUI(ctk.CTk):
             "#dddddd"
         )
 
+        self._show_loading()
+        self._show_stop_bar()
+
         threading.Thread(
             target=self._process_ai_response,
             args=(text,),
             daemon=True
         ).start()
-
     # =====================================================
     # AI PROCESSING
     # =====================================================
@@ -195,20 +261,172 @@ class GhostMindGUI(ctk.CTk):
             self.loop
         )
 
+        self._current_future = future
+
         try:
             response = future.result(timeout=120)
+
+        except concurrent.futures.CancelledError:
+            # User hit Stop â let _stop_generation handle the UI
+            self._current_future = None
+            return
 
         except Exception as e:
             response = f"[ERROR]\n{e}"
 
-        self.after(
-            0,
-            lambda: self._append_message(
-                "MINI VON",
-                response,
-                "#8ecfff"
-            )
+        self._current_future = None
+
+        def _on_response():
+            self._hide_loading()
+            self._hide_stop_bar()
+            self._append_message("MINI VON", response, "#8ecfff")
+            self.input_box.configure(state="normal")
+            self.send_button.configure(state="normal")
+            self.input_box.focus()
+
+        self.after(0, _on_response)
+
+    # =====================================================
+    # STOP BAR
+    # =====================================================
+
+    def _show_stop_bar(self):
+        """Slide the stop bar in above the input."""
+        self.stop_bar.grid(
+            row=1,
+            column=0,
+            sticky="ew",
+            padx=10,
+            pady=(0, 4)
         )
+
+    def _hide_stop_bar(self):
+        """Remove the stop bar from the layout."""
+        self.stop_bar.grid_remove()
+
+    def _stop_generation(self, mode: str):
+        """
+        Cancel the in-flight LLM future and handle the two stop modes:
+          - 'clear'  : discard, let the user start fresh
+          - 'refine' : restore the original prompt so it can be edited
+        """
+        self._stop_mode = mode
+
+        if self._current_future is not None:
+            self._current_future.cancel()
+
+        # _process_ai_response will return early on CancelledError;
+        # we drive all UI changes here on the main thread.
+        self._hide_loading()
+        self._hide_stop_bar()
+        self.input_box.configure(state="normal")
+        self.send_button.configure(state="normal")
+
+        if mode == "refine":
+            # Restore the original prompt and let the user amend it
+            self.input_box.delete("1.0", "end")
+            self.input_box.insert("1.0", self._current_prompt)
+            self._append_message(
+                "SYSTEM",
+                "Generation stopped â refine your prompt above and resend.",
+                "#888888"
+            )
+        else:
+            # Clear stop â just acknowledge and move on
+            self._append_message(
+                "SYSTEM",
+                "Generation stopped.",
+                "#888888"
+            )
+
+        self.input_box.focus()
+        self._stop_mode = None
+
+    # =====================================================
+    # LOADING ANIMATION
+    # =====================================================
+
+    def _show_loading(self):
+        """Show an animated thinking bubble while the LLM is generating."""
+
+        self._loading_active = True
+
+        self._loading_frame = ctk.CTkFrame(
+            self.chat_frame,
+            fg_color="#1a1a1a",
+            corner_radius=10
+        )
+
+        self._loading_frame.pack(
+            fill="x",
+            padx=6,
+            pady=6
+        )
+
+        header = ctk.CTkLabel(
+            self._loading_frame,
+            text="MINI VON",
+            font=("Segoe UI", 10, "bold"),
+            text_color="#888888",
+            anchor="w"
+        )
+
+        header.pack(
+            anchor="w",
+            padx=10,
+            pady=(8, 2)
+        )
+
+        self._loading_label = ctk.CTkLabel(
+            self._loading_frame,
+            text="",
+            font=("Consolas", 14),
+            text_color="#8ecfff",
+            anchor="w"
+        )
+
+        self._loading_label.pack(
+            fill="x",
+            padx=14,
+            pady=(0, 10)
+        )
+
+        self._animate_loading(0)
+
+    def _animate_loading(self, step):
+        """Cycle through dot animation frames."""
+
+        if not self._loading_active:
+            return
+
+        frames = [
+            "â¬¤  â  â",
+            "â  â¬¤  â",
+            "â  â  â¬¤",
+            "â  â¬¤  â",
+        ]
+
+        if self._loading_label and self._loading_label.winfo_exists():
+            self._loading_label.configure(text=frames[step % len(frames)])
+
+        self._loading_anim_id = self.after(
+            350,
+            lambda: self._animate_loading(step + 1)
+        )
+
+    def _hide_loading(self):
+        """Remove the loading bubble and cancel the animation."""
+
+        self._loading_active = False
+
+        if self._loading_anim_id is not None:
+            self.after_cancel(self._loading_anim_id)
+            self._loading_anim_id = None
+
+        if self._loading_frame is not None:
+            self._loading_frame.destroy()
+            self._loading_frame = None
+            self._loading_label = None
 
     # =====================================================
     # CHAT DISPLAY
