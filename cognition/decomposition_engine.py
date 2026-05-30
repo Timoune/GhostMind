@@ -158,18 +158,22 @@ class DecompositionEngine:
         self,
         raw: str,
     ) -> dict:
-
-        # Strip markdown code fences (```json ... ``` or ``` ... ```)
-        # that LLMs frequently add around JSON output.
+        """
+        Strip markdown code fences (e.g. ```json ... ```) and parse JSON.
+        """
         text = raw.strip()
+
         if text.startswith("```"):
-            text = text.split("\n", 1)[-1]
-            text = text.rsplit("```", 1)[0]
+            text = text[3:]
+            if text.startswith("json"):
+                text = text[4:]
             text = text.strip()
+
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[:-3].strip()
 
         try:
             return json.loads(text)
-
         except Exception as e:
             self.logger.error(
                 "decomposition_parse_failed",
