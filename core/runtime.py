@@ -1,70 +1,70 @@
 import asyncio
 
-from core.config_loader import ConfigLoader
-from core.logger import LoggerManager
-from core.state_manager import StateManager
-from core.scheduler import Scheduler
-from core.heartbeat import Heartbeat
-from core.module_base import GhostModule
+from core.config_loader    import ConfigLoader
+from core.logger           import LoggerManager
+from core.state_manager    import StateManager
+from core.scheduler        import Scheduler
+from core.heartbeat        import Heartbeat
+from core.autonomous_agent import AutonomousAgent
+from core.module_base      import GhostModule
 
 from orchestration.event_bus import EventBus
 
-from memory.memory_bridge import MemoryBridge
-from memory.working_memory import WorkingMemory
-from memory.context_loader import ContextLoader
+from memory.memory_bridge   import MemoryBridge
+from memory.working_memory  import WorkingMemory
+from memory.context_loader  import ContextLoader
 
-from llm.model_client import ModelClient
-from cognition.pipeline import CognitionPipeline
+from llm.model_client     import ModelClient
+from cognition.pipeline   import CognitionPipeline
 
 
 class Runtime:
 
     def __init__(self):
-        self.running = False
-        self.config_loader = ConfigLoader()
+        self.running        = False
+        self.config_loader  = ConfigLoader()
         self.logger_manager = LoggerManager()
-        self.state_manager = StateManager()
-        self.scheduler = Scheduler()
+        self.state_manager  = StateManager()
+        self.scheduler      = Scheduler()
         self.modules: list[GhostModule] = []
 
-        # BUG FIX: store background task references so they cannot be
-        # garbage-collected mid-execution and so stop() can await them.
+        # Keep task references alive (GC safety) and allow clean shutdown
         self._bg_tasks: set[asyncio.Task] = set()
 
     async def initialize(self):
 
-        # ── Config ────────────────────────────────────────────────────────────
+        # ââ Config ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
         self.config_loader.load_all()
 
-        # ── Logging ───────────────────────────────────────────────────────────
+        # ââ Logging âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
         log_dir = self.config_loader.get("runtime.logging.log_dir", "logs/")
         self.logger_manager = LoggerManager(log_dir=log_dir)
         self.logger_manager.initialize()
         self.logger = self.logger_manager.get_logger("runtime")
         self.logger.info("runtime_initializing")
 
-        # ── Event Bus ─────────────────────────────────────────────────────────
+        # ââ Event Bus âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
         self.event_bus = EventBus()
 
-        # ── Heartbeat ─────────────────────────────────────────────────────────
+        # ââ Heartbeat âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
         interval = self.config_loader.get(
             "runtime.heartbeat.interval_seconds", 5
         )
         self.heartbeat = Heartbeat(
             logger=self.logger,
             state_manager=self.state_manager,
-            interval_seconds=interval
+            interval_seconds=interval,
         )
 
-        # ── Memory ────────────────────────────────────────────────────────────
-        memory_host = self.config_loader.get("memory.api.host", "127.0.0.1")
-        memory_port = self.config_loader.get("memory.api.port", 8000)
+        # ââ Memory ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+        memory_host = self.config_loader.get("memory.api.host",             "127.0.0.1")
+        memory_port = self.config_loader.get("memory.api.port",             8000)
         max_items   = self.config_loader.get("memory.working_memory.max_items", 20)
 
         self.memory_bridge = MemoryBridge(
             host=memory_host,
             port=memory_port,
-            logger=self.logger
+            logger=self.logger,
         )
         await self.memory_bridge.start()
 
@@ -72,7 +72,7 @@ class Runtime:
         self.context_loader = ContextLoader(
             memory_bridge=self.memory_bridge,
             working_memory=self.working_memory,
-            logger=self.logger
+            logger=self.logger,
         )
 
         try:
@@ -82,19 +82,19 @@ class Runtime:
             self.logger.warning(
                 "dreamcloud_unavailable",
                 error=str(e),
-                note="Running without long-term memory until DreamCloud starts"
+                note="Running without long-term memory until DreamCloud starts",
             )
 
-        # ── LLM ───────────────────────────────────────────────────────────────
-        llm_endpoint = self.config_loader.get("models.endpoint", "http://127.0.0.1:8080")
-        llm_timeout  = self.config_loader.get("models.timeout_seconds", 60)
-        temperature  = self.config_loader.get("models.temperature", 0.7)
-        max_tokens   = self.config_loader.get("models.max_tokens", 1024)
+        # ââ LLM âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+        llm_endpoint = self.config_loader.get("models.endpoint",         "http://127.0.0.1:8080")
+        llm_timeout  = self.config_loader.get("models.timeout_seconds",  60)
+        temperature  = self.config_loader.get("models.temperature",      0.7)
+        max_tokens   = self.config_loader.get("models.max_tokens",       1024)
 
         self.model_client = ModelClient(
             endpoint=llm_endpoint,
             timeout_seconds=llm_timeout,
-            logger=self.logger
+            logger=self.logger,
         )
         await self.model_client.start()
 
@@ -109,10 +109,14 @@ class Runtime:
                 note=(
                     "Start llama-server before calling think(). "
                     "llama-server --model MiniVon/llm/<model>.gguf --port 8080"
-                )
+                ),
             )
 
-        # ── Cognition Pipeline ────────────────────────────────────────────────
+        # ââ Cognition settings ââââââââââââââââââââââââââââââââââââââââââââââââ
+        max_depth       = self.config_loader.get("cognition.max_reasoning_depth", 5)
+        autonomous_mode = self.config_loader.get("safety.autonomous_mode",        False)
+
+        # ââ Cognition Pipeline ââââââââââââââââââââââââââââââââââââââââââââââââ
         self.cognition = CognitionPipeline(
             model_client=self.model_client,
             context_loader=self.context_loader,
@@ -120,12 +124,30 @@ class Runtime:
             memory_bridge=self.memory_bridge,
             state_manager=self.state_manager,
             logger=self.logger,
+            event_bus=self.event_bus,
             temperature=temperature,
-            max_tokens=max_tokens
+            max_tokens=max_tokens,
+            max_reasoning_depth=max_depth,
+            autonomous_mode=autonomous_mode,
         )
 
-        # ── Register modules ──────────────────────────────────────────────────
-        self.modules.extend([self.event_bus, self.heartbeat])
+        # ââ Autonomous Agent ââââââââââââââââââââââââââââââââââââââââââââââââââ
+        self.autonomous_agent = AutonomousAgent(
+            scheduler=self.scheduler,
+            event_bus=self.event_bus,
+            state_manager=self.state_manager,
+            memory_bridge=self.memory_bridge,
+            working_memory=self.working_memory,
+            logger=self.logger,
+            autonomous_mode=autonomous_mode,
+        )
+
+        # ââ Register modules ââââââââââââââââââââââââââââââââââââââââââââââââââ
+        self.modules.extend([
+            self.event_bus,
+            self.heartbeat,
+            self.autonomous_agent,
+        ])
 
         for module in self.modules:
             await module.initialize()
@@ -137,17 +159,10 @@ class Runtime:
         self.running = True
         self.logger.info("runtime_started")
 
-        # BUG FIX 1: iterate self.modules instead of hardcoding two specific
-        # modules — any module added to the list in future is automatically started.
-        #
-        # BUG FIX 2: store every task reference in self._bg_tasks.
-        # Tasks not referenced by anything else can be GC'd mid-execution in
-        # CPython. The set keeps them alive. The done_callback auto-removes
-        # finished tasks so the set doesn't grow forever.
         for module in self.modules:
             task = asyncio.create_task(
                 module.start(),
-                name=type(module).__name__
+                name=type(module).__name__,
             )
             self._bg_tasks.add(task)
             task.add_done_callback(self._handle_task_result)
@@ -156,23 +171,15 @@ class Runtime:
             await asyncio.sleep(1)
 
     def _handle_task_result(self, task: asyncio.Task):
-        """
-        Done-callback attached to every background task.
-
-        Removes the task from the live set and logs any unexpected exceptions
-        so they are never silently swallowed.
-        """
         self._bg_tasks.discard(task)
-
         if task.cancelled():
             return
-
         exc = task.exception()
         if exc is not None:
             self.logger.error(
                 "background_task_crashed",
                 task=task.get_name(),
-                error=str(exc)
+                error=str(exc),
             )
 
     async def stop(self):
@@ -180,7 +187,6 @@ class Runtime:
         self.running = False
         await self.state_manager.set_runtime_state("STOPPING")
 
-        # Signal every module to stop (sets their internal running = False)
         for module in reversed(self.modules):
             try:
                 await module.stop()
@@ -188,35 +194,27 @@ class Runtime:
                 self.logger.error(
                     "module_stop_error",
                     module=type(module).__name__,
-                    error=str(e)
+                    error=str(e),
                 )
 
-        # BUG FIX 3: wait for background loops to finish their current
-        # iteration before closing shared resources (HTTP sessions, etc.).
-        # Without this, memory_bridge.stop() could close the aiohttp session
-        # while a heartbeat tick is still mid-await inside it.
         if self._bg_tasks:
             self.logger.info(
                 "runtime_awaiting_tasks",
-                count=len(self._bg_tasks)
+                count=len(self._bg_tasks),
             )
             await asyncio.gather(*self._bg_tasks, return_exceptions=True)
 
         await self.scheduler.shutdown()
-
-        # Safe to close HTTP sessions now — all loops have exited
         await self.model_client.stop()
         await self.memory_bridge.stop()
 
         await self.state_manager.set_runtime_state("STOPPED")
         self.logger.info("runtime_stopped")
 
-    # ── Public API ────────────────────────────────────────────────────────────
+    # ââ Public API ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
     async def think(self, user_input: str) -> str:
-        return await self.cognition.think(
-            user_input=user_input
-        )
+        return await self.cognition.think(user_input=user_input)
 
     async def state(self) -> dict:
         return await self.state_manager.get_full_state()
