@@ -107,18 +107,28 @@ class IntentEngine:
         self,
         raw: str,
     ) -> dict:
+        """
+        Strip markdown code fences (e.g. ```json ... ```) and parse JSON.
 
-        # Strip markdown code fences (```json ... ``` or ``` ... ```)
-        # that LLMs frequently add around JSON output.
+        The LLM often wraps JSON in a code block. This method removes the
+        opening fence, the optional language tag, and the closing fence
+        before attempting to parse.
+        """
         text = raw.strip()
+
+        # Remove opening fence ``` and any language identifier
         if text.startswith("```"):
-            text = text.split("\n", 1)[-1]  # drop opening fence line
-            text = text.rsplit("```", 1)[0]  # drop closing fence
+            text = text[3:]                     # drop ```
+            if text.startswith("json"):
+                text = text[4:]                  # drop 'json'
             text = text.strip()
+
+        # Remove closing fence ``` at the end of the string
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[:-3].strip()   # drop trailing ```
 
         try:
             return json.loads(text)
-
         except Exception as e:
             self.logger.error(
                 "intent_analysis_parse_failed",
