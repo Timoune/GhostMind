@@ -18,13 +18,12 @@ class PlanningEngine:
         decomposition: DecompositionResult,
     ) -> ExecutionPlan:
 
-        ordered_tasks = sorted(
-            decomposition.tasks,
-            key=lambda t: (
-                t.priority,
-                t.estimated_steps,
-            ),
-        )
+        # Preserve the dependency-respecting order already established
+        # by DecisionEngine.prioritize_goals(). Re-sorting here by
+        # (priority, estimated_steps) would discard that order and
+        # can place high-priority dependent tasks before their
+        # lower-priority prerequisites.
+        ordered_tasks = list(decomposition.tasks)
 
         overall_risk = self._calculate_risk(
             ordered_tasks
