@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 
 from cognition.cognition_types import (
@@ -159,13 +160,15 @@ class DecompositionEngine:
         raw: str,
     ) -> dict:
 
-        # Strip markdown code fences (```json ... ``` or ``` ... ```)
-        # that LLMs frequently add around JSON output.
+        # Strip markdown code fences robustly.
+        # Handles ```json, ```python, ``` etc.
+        # The old split("\n",1) approach left the language
+        # specifier (e.g. "json") in the text when the LLM
+        # emits it on its own line, causing json.loads to fail.
         text = raw.strip()
-        if text.startswith("```"):
-            text = text.split("\n", 1)[-1]
-            text = text.rsplit("```", 1)[0]
-            text = text.strip()
+        text = re.sub(r"^```[^\n]*\n", "", text)  # drop opening fence line
+        text = re.sub(r"\n?```\s*$", "", text)     # drop closing fence
+        text = text.strip()
 
         try:
             return json.loads(text)
