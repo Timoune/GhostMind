@@ -16,6 +16,8 @@ from memory.context_loader  import ContextLoader
 
 from llm.model_client     import ModelClient
 from cognition.pipeline   import CognitionPipeline
+from cognition.human_approval_gate   import HumanApprovalGate
+from cognition.multi_agent_orchestrator import MultiAgentOrchestrator
 
 
 class Runtime:
@@ -28,7 +30,10 @@ class Runtime:
         self.scheduler      = Scheduler()
         self.modules: list[GhostModule] = []
 
-        # Keep task references alive (GC safety) and allow clean shutdown
+        # Exposed so the GUI can wire callbacks after initialize()
+        self.hitl_gate:               HumanApprovalGate   | None = None
+        self.multi_agent_orchestrator: MultiAgentOrchestrator | None = None
+
         self._bg_tasks: set[asyncio.Task] = set()
 
     async def initialize(self):
@@ -57,8 +62,8 @@ class Runtime:
         )
 
         # ââ Memory ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
-        memory_host = self.config_loader.get("memory.api.host",             "127.0.0.1")
-        memory_port = self.config_loader.get("memory.api.port",             8000)
+        memory_host = self.config_loader.get("memory.api.host",                "127.0.0.1")
+        memory_port = self.config_loader.get("memory.api.port",                8000)
         max_items   = self.config_loader.get("memory.working_memory.max_items", 20)
 
         self.memory_bridge = MemoryBridge(
@@ -86,10 +91,10 @@ class Runtime:
             )
 
         # ââ LLM âââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
-        llm_endpoint = self.config_loader.get("models.endpoint",         "http://127.0.0.1:8080")
-        llm_timeout  = self.config_loader.get("models.timeout_seconds",  60)
-        temperature  = self.config_loader.get("models.temperature",      0.7)
-        max_tokens   = self.config_loader.get("models.max_tokens",       1024)
+        llm_endpoint = self.config_loader.get("models.endpoint",        "http://127.0.0.1:8080")
+        llm_timeout  = self.config_loader.get("models.timeout_seconds", 60)
+        temperature  = self.config_loader.get("models.temperature",     0.7)
+        max_tokens   = self.config_loader.get("models.max_tokens",      1024)
 
         self.model_client = ModelClient(
             endpoint=llm_endpoint,
@@ -116,6 +121,29 @@ class Runtime:
         max_depth       = self.config_loader.get("cognition.max_reasoning_depth", 5)
         autonomous_mode = self.config_loader.get("safety.autonomous_mode",        False)
 
+        # ââ HITL gate âââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
+        hitl_enabled   = self.config_loader.get("safety.hitl.enabled",          True)
+        hitl_timeout   = self.config_loader.get("safety.hitl.timeout_seconds",  120.0)
+        hitl_threshold = self.config_loader.get("safety.hitl.risk_threshold",   "high")
+
+        self.hitl_gate = HumanApprovalGate(
+            logger=self.logger,
+            timeout_seconds=hitl_timeout,
+        )
+        self.logger.info(
+            "hitl_gate_ready",
+            enabled=hitl_enabled,
+            threshold=hitl_threshold,
+            timeout=hitl_timeout,
+        )
+
+        # ââ Multi-agent orchestrator âââââââââââââââââââââââââââââââââââââââââââ
+        self.multi_agent_orchestrator = MultiAgentOrchestrator(
+            model_client=self.model_client,
+            logger=self.logger,
+        )
+        self.logger.info("multi_agent_orchestrator_ready")
+
         # ââ Cognition Pipeline ââââââââââââââââââââââââââââââââââââââââââââââââ
         self.cognition = CognitionPipeline(
             model_client=self.model_client,
@@ -129,9 +157,15 @@ class Runtime:
             max_tokens=max_tokens,
             max_reasoning_depth=max_depth,
             autonomous_mode=autonomous_mode,
+            # HITL
+            hitl_gate=self.hitl_gate if hitl_enabled else None,
+            hitl_enabled=hitl_enabled,
+            hitl_risk_threshold=hitl_threshold,
+            # Multi-agent
+            multi_agent_orchestrator=self.multi_agent_orchestrator,
         )
 
-        # ââ Autonomous Agent ââââââââââââââââââââââââââââââââââââââââââââââââââ
+        # ââ Autonomous Agent âââââââââââââââââââââââââââââââââââââââââââââââââââ
         self.autonomous_agent = AutonomousAgent(
             scheduler=self.scheduler,
             event_bus=self.event_bus,
@@ -142,7 +176,7 @@ class Runtime:
             autonomous_mode=autonomous_mode,
         )
 
-        # ââ Register modules ââââââââââââââââââââââââââââââââââââââââââââââââââ
+        # ââ Register modules âââââââââââââââââââââââââââââââââââââââââââââââââââ
         self.modules.extend([
             self.event_bus,
             self.heartbeat,
@@ -187,6 +221,10 @@ class Runtime:
         self.running = False
         await self.state_manager.set_runtime_state("STOPPING")
 
+        # Cancel any pending HITL approvals gracefully
+        if self.hitl_gate:
+            self.hitl_gate.cancel_all()
+
         for module in reversed(self.modules):
             try:
                 await module.stop()
@@ -198,10 +236,7 @@ class Runtime:
                 )
 
         if self._bg_tasks:
-            self.logger.info(
-                "runtime_awaiting_tasks",
-                count=len(self._bg_tasks),
-            )
+            self.logger.info("runtime_awaiting_tasks", count=len(self._bg_tasks))
             await asyncio.gather(*self._bg_tasks, return_exceptions=True)
 
         await self.scheduler.shutdown()
@@ -210,6 +245,18 @@ class Runtime:
 
         await self.state_manager.set_runtime_state("STOPPED")
         self.logger.info("runtime_stopped")
+
+    # ââ Callback wiring (called by GUI after initialize()) ââââââââââââââââââââ
+
+    def set_hitl_callback(self, callback):
+        """Wire the GUI's approval-dialog callback into the HITL gate."""
+        if self.hitl_gate:
+            self.hitl_gate.on_approval_requested = callback
+
+    def set_agent_update_callback(self, callback):
+        """Wire the GUI's loading-label callback into the multi-agent orchestrator."""
+        if self.multi_agent_orchestrator:
+            self.multi_agent_orchestrator.on_agent_update = callback
 
     # ââ Public API ââââââââââââââââââââââââââââââââââââââââââââââââââââââââââââ
 
