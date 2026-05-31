@@ -7,6 +7,7 @@ from core.scheduler        import Scheduler
 from core.heartbeat        import Heartbeat
 from core.autonomous_agent import AutonomousAgent
 from core.module_base      import GhostModule
+from core.ghostmind        import GhostMind
 
 from orchestration.event_bus import EventBus
 
@@ -176,9 +177,23 @@ class Runtime:
             autonomous_mode=autonomous_mode,
         )
 
-        # ââ Register modules âââââââââââââââââââââââââââââââââââââââââââââââââââ
+        # ── GhostMind core module ──────────────────────────────────────
+        # Registered before heartbeat/agent so event subscriptions are live
+        # before any events are published by the pipeline or scheduler.
+        self.ghostmind = GhostMind(
+            config_loader=self.config_loader,
+            event_bus=self.event_bus,
+            state_manager=self.state_manager,
+            logger=self.logger_manager.get_logger("ghostmind"),
+        )
+        self.logger.info("ghostmind_module_created", version=GhostMind.VERSION)
+
+        # ── Register modules ───────────────────────────────────────────────
+        # Order: event_bus first (pub/sub infra), ghostmind second (subscriptions),
+        # then heartbeat and autonomous_agent.
         self.modules.extend([
             self.event_bus,
+            self.ghostmind,
             self.heartbeat,
             self.autonomous_agent,
         ])
