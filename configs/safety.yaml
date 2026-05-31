@@ -2,3 +2,11 @@ safety:
   max_recursion_depth: 3
   execution_enabled: false
   autonomous_mode: false
+
+  hitl:
+    # Human-in-the-loop approval gate
+    enabled: true
+    # Risk level at which the gate triggers: "high" | "critical"
+    risk_threshold: high
+    # Seconds to wait for human response before auto-denying
+    timeout_seconds: 120
