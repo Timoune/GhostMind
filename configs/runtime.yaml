@@ -1,6 +1,6 @@
 system:
   name: GhostMind
-  version: 0.1
+  version: "4.4"
 
 runtime:
   debug: true
