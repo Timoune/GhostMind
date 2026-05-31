@@ -47,3 +47,20 @@ class ExecutionPlan:
     estimated_complexity: str
     requires_confirmation: bool
     reasoning: str
+
+
+# ── Multi-agent types ──────────────────────────────────────────────────────────
+
+@dataclass
+class AgentResult:
+    """Output from a single reasoning agent."""
+    agent_name: str
+    role: str        # "analyst" | "critic" | "synthesizer"
+    output: str
+
+
+@dataclass
+class MultiAgentResult:
+    """Aggregated result from the MultiAgentOrchestrator."""
+    agent_results: List[AgentResult]
+    final_synthesis: str
