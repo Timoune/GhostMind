@@ -1,0 +1,64 @@
+# configs/ghostmind.yaml
+# ──────────────────────────────────────────────────────────────────────────────
+# GhostMind v4.4 — Core module configuration
+#
+# All keys are read by GhostMind.__init__() via ConfigLoader.get(path, default).
+# Changing values here takes effect on the next Runtime restart.
+# ──────────────────────────────────────────────────────────────────────────────
+
+ghostmind:
+
+  # ── Identity ─────────────────────────────────────────────────────────────
+  # The self-model identity stamped into StateManager at initialize().
+  # Other modules can read ghostmind_name / ghostmind_version from system_state.
+  identity:
+    name:        GhostMind
+    version:     "4.4"
+    description: >
+      Autonomous cognitive agent — identity and meta-cognitive awareness layer.
+
+  # ── Background loop intervals ─────────────────────────────────────────────
+  # Both loops run independently as managed asyncio Tasks.
+  # Increase intervals to reduce log noise; decrease for tighter monitoring.
+  loops:
+    # How often (seconds) to run a full self-review of cognitive + system state.
+    # A review publishes ghostmind_self_review_alert if thresholds are breached.
+    self_review_interval: 180
+
+    # How often (seconds) to run a meta-cognitive introspection check.
+    # Introspection validates self-model consistency without an LLM call.
+    introspection_interval: 90
+
+    # Maximum recursive depth for self_review calls triggered by urgent events
+    # (e.g. a high_risk_detected event). Prevents runaway recursion.
+    max_review_depth: 3
+
+  # ── Health thresholds ─────────────────────────────────────────────────────
+  # Thresholds that determine when self_review raises an alert.
+  health:
+    # Float 0.0–1.0. If cognitive_state.risk_level meets or exceeds this,
+    # self_review flags "elevated_risk" and publishes an alert event.
+    risk_threshold: 0.8
+
+    # Integer percentage. If system_state.memory_usage exceeds this,
+    # self_review flags "memory_pressure".
+    memory_pressure_threshold: 85
+
+    # If true, crashed background loops are automatically respawned.
+    # Disable in testing environments to surface failures immediately.
+    auto_respawn_bg_tasks: true
+
+  # ── Event subscriptions ───────────────────────────────────────────────────
+  # Informational only — actual subscriptions are wired in GhostMind.initialize().
+  # Listed here for operator visibility and future dynamic subscription support.
+  events:
+    subscriptions:
+      - high_risk_detected       # priority 1 — urgent self-review triggered
+      - reflection_complete      # priority 5 — scorecard logging
+      - reflection_retry         # priority 3 — retry tracking + chronic alert
+      - cognition_complete       # priority 5 — cycle completion log
+      - hitl_gate_triggered      # priority 2 — human-approval gate log
+
+    # Events published BY GhostMind onto the bus:
+    publishes:
+      - ghostmind_self_review_alert   # when health thresholds are breached
