@@ -332,6 +332,18 @@ class CognitionPipeline:
                 execution_plan=execution_plan,
             )
 
+            # Publish full scorecard so GhostMind and other subscribers
+            # can react to reflection quality without parsing CognitionRecord.
+            await self._publish("reflection_complete", {
+                "coherence_score":      reflection.coherence_score,
+                "hallucination_risk":   reflection.hallucination_risk,
+                "reasoning_quality":    reflection.reasoning_quality,
+                "planning_quality":     reflection.planning_quality,
+                "confidence_alignment": reflection.confidence_alignment,
+                "requires_retry":       reflection.requires_retry,
+                "retry_reason":         reflection.retry_reason,
+            }, priority=4)
+
             if reflection.requires_retry:
                 self.logger.warning(
                     "reflection_retry_triggered",
