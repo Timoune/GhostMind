@@ -97,7 +97,7 @@ class EventBus(GhostModule):
         exc = task.exception()
         if exc is not None:
             # We don't have self.logger here (EventBus is intentionally
-            # lightweight), so print to stderr — replace with your logger
+            # lightweight), so print to stderr â replace with your logger
             # if you inject one into EventBus later.
             import sys
             print(
