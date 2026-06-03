@@ -109,5 +109,3 @@ class ModelClient:
                 prompt_tokens=usage.get("prompt_tokens", 0),
                 completion_tokens=usage.get("completion_tokens", 0)
             )
-
-        return text

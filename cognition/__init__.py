@@ -1,28 +1,55 @@
+"""
+cognition package — GhostMind v4.5
+
+Contains the core cognitive engines and types:
+- Intent analysis
+- Task decomposition
+- Planning and risk assessment
+- Metacognition (assumption tracking + uncertainty)
+- Decision making
+- Reflection
+"""
+
 from .intent_engine import IntentEngine
 from .decomposition_engine import DecompositionEngine
 from .planning_engine import PlanningEngine
-from .reflection_engine import ReflectionEngine
 from .decision_engine import DecisionEngine
-from .step_executor import StepExecutor
-from .decision_ledger import DecisionLedger
+from .meta_reasoner import MetaReasoner
+from .reflection_engine import ReflectionEngine
 
 from .cognition_types import (
     IntentAnalysis,
-    TaskNode,
     DecompositionResult,
     ExecutionPlan,
-    AgentResult,
-    MultiAgentResult,
-)
-
-from .cognition_record import (
+    TaskNode,
     ReflectionResult,
     CognitionRecord,
+    Uncertainty,
+    Assumption,
 )
 
-from .human_approval_gate import (
-    HumanApprovalGate,
-    ApprovalRequest,
-)
+from .pipeline import CognitionPipeline
 
-from .multi_agent_orchestrator import MultiAgentOrchestrator
+
+__all__ = [
+    # Engines
+    "IntentEngine",
+    "DecompositionEngine",
+    "PlanningEngine",
+    "DecisionEngine",
+    "MetaReasoner",
+    "ReflectionEngine",
+
+    # Main entry point
+    "CognitionPipeline",
+
+    # Public types
+    "IntentAnalysis",
+    "DecompositionResult",
+    "ExecutionPlan",
+    "TaskNode",
+    "ReflectionResult",
+    "CognitionRecord",
+    "Uncertainty",
+    "Assumption",
+]
