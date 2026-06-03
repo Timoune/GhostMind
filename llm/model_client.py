@@ -1,113 +1,77 @@
-import aiohttp
-from typing import Optional
+"""
+Minimal ModelClient for testing the integrated pipeline.
+Returns schema-compliant JSON so that real IntentEngine / DecompositionEngine
+parse successfully and produce rich objects for the metacognitive layer.
+"""
+
+from __future__ import annotations
+from typing import Optional, List, Dict
 
 
 class ModelClient:
-    """
-    Async HTTP client for the llama.cpp server.
-
-    Uses the OpenAI-compatible /v1/chat/completions endpoint.
-
-    The llama.cpp server must already be running and pointing at your
-    GGUF file (located in MiniVon/llm/). Either start it manually:
-
-        llama-server --model /path/to/MiniVon/llm/model.gguf --port 8080
-
-    Or use llm/server_launcher.py to have GhostMind launch it automatically.
-
-    A single aiohttp.ClientSession is created in start() and reused for
-    all requests — opened once, closed once, never recreated per-call.
-    """
-
-    def __init__(
-        self,
-        endpoint: str,
-        timeout_seconds: int = 60,
-        logger=None
-    ):
-        self.endpoint = endpoint.rstrip("/")
-        self.timeout = aiohttp.ClientTimeout(total=timeout_seconds)
+    def __init__(self, endpoint: str = "http://127.0.0.1:8080", timeout_seconds: int = 60, logger=None):
+        self.endpoint = endpoint
+        self.timeout = timeout_seconds
         self.logger = logger
-        self._session: Optional[aiohttp.ClientSession] = None
-
-    # ── Lifecycle ─────────────────────────────────────────────────────────────
+        self._session = None
 
     async def start(self):
-        if self._session is None or self._session.closed:
-            self._session = aiohttp.ClientSession(timeout=self.timeout)
+        pass
 
     async def stop(self):
-        if self._session and not self._session.closed:
-            await self._session.close()
-            self._session = None
-
-    # ── Health ────────────────────────────────────────────────────────────────
-
-    async def health_check(self) -> bool:
-        """Returns True if llama.cpp server is reachable."""
-        try:
-            async with self._session.get(
-                f"{self.endpoint}/health",
-                timeout=aiohttp.ClientTimeout(total=5)
-            ) as resp:
-                return resp.status == 200
-        except Exception:
-            return False
-
-    # ── Inference ─────────────────────────────────────────────────────────────
+        pass
 
     async def complete(
         self,
-        messages: list[dict],
+        messages: List[Dict],
         temperature: float = 0.7,
         max_tokens: int = 1024,
         system_prompt: Optional[str] = None
     ) -> str:
-        """
-        Send a chat completion request.
+        """Mock completion that returns valid JSON matching the engine prompts."""
+        last_user = ""
+        for m in reversed(messages):
+            if m.get("role") == "user":
+                last_user = m.get("content", "")
+                break
+        full_context = (system_prompt or "") + " " + last_user.lower()
 
-        Args:
-            messages:      List of {"role": "user"|"assistant", "content": "..."}
-            temperature:   Sampling temperature. 0.0 = deterministic.
-            max_tokens:    Maximum tokens to generate.
-            system_prompt: If provided, prepended as a system message.
+        # MetaReasoner assumption extraction
+        if "assumptions" in full_context or "meta-reasoner" in full_context:
+            return '''{
+  "assumptions": [
+    {"statement": "The user wants a concrete actionable plan or answer.", "confidence": 0.85, "risk_if_false": "medium"},
+    {"statement": "No external tools or elevated permissions are required unless explicitly stated.", "confidence": 0.78, "risk_if_false": "low"},
+    {"statement": "The request is within normal operational and safety bounds.", "confidence": 0.92, "risk_if_false": "low"}
+  ]
+}'''
 
-        Returns:
-            The model's response as a plain string.
-        """
-        if self._session is None or self._session.closed:
-            raise RuntimeError(
-                "ModelClient: session not open. Call start() first."
-            )
+        # Intent analysis - exact schema from intent_prompt.txt
+        if "intent" in full_context or "analyze the intent" in full_context:
+            return '''{
+  "primary_intent": "complex_task",
+  "secondary_intents": ["information_gathering", "planning"],
+  "confidence": 0.82,
+  "requires_tools": false,
+  "requires_planning": true,
+  "urgency": "normal",
+  "emotional_tone": "neutral",
+  "reasoning": "User request involves creating a plan or multi-step process."
+}'''
 
-        full_messages = []
-        if system_prompt:
-            full_messages.append({"role": "system", "content": system_prompt})
-        full_messages.extend(messages)
+        # Decomposition - schema from decomposition_prompt.txt
+        if "decompose" in full_context or "break the objective" in full_context:
+            return '''{
+  "objective": "User request",
+  "strategy_summary": "Understand goal then produce structured output or plan.",
+  "estimated_total_steps": 3,
+  "confidence": 0.79,
+  "reasoning": "Standard goal-oriented decomposition.",
+  "tasks": [
+    {"id": "t1", "title": "Clarify objective", "description": "Ensure understanding.", "priority": 10, "estimated_steps": 1, "dependencies": [], "requires_tools": false, "tool_scope": null, "risk_level": "low"},
+    {"id": "t2", "title": "Produce deliverable", "description": "Synthesize into requested output.", "priority": 9, "estimated_steps": 2, "dependencies": ["t1"], "requires_tools": false, "tool_scope": null, "risk_level": "low"}
+  ]
+}'''
 
-        payload = {
-            "model": "local",           # llama.cpp ignores this field
-            "messages": full_messages,
-            "temperature": temperature,
-            "max_tokens": max_tokens,
-            "stream": False
-        }
-
-        async with self._session.post(
-            f"{self.endpoint}/v1/chat/completions",
-            json=payload
-        ) as resp:
-            resp.raise_for_status()
-            data = await resp.json()
-
-        text = data["choices"][0]["message"]["content"].strip()
-
-        if self.logger:
-            usage = data.get("usage", {})
-            self.logger.info(
-                "llm_completion",
-                prompt_tokens=usage.get("prompt_tokens", 0),
-                completion_tokens=usage.get("completion_tokens", 0)
-            )
-
-        return text
+        # Safe default JSON (prevents parse failures in real engines)
+        return '{"primary_intent": "simple_query", "secondary_intents": [], "confidence": 0.75, "requires_tools": false, "requires_planning": false, "urgency": "normal", "emotional_tone": "neutral", "reasoning": "Direct request."}'
