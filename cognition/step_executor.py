@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from cognition.cognition_types import ExecutionPlan
 
 
@@ -29,13 +31,13 @@ class StepExecutor:
     """
     Iterative multi-step task executor.
 
-    Executes each TaskNode in an ExecutionPlan sequentially, passing
-    accumulated results between steps, then calls the LLM a final time
-    to synthesize a unified response.
+    Now supports routing tool-requiring tasks through BloodyHeart → BigArms.
 
     Responsibilities
     ────────────────
     • Multi-step reasoning  — one LLM call per task, up to max_depth
+    • Tool execution        — if task.requires_tools and bloodyheart_adapter is provided,
+                              routes execution via GhostMind → BloodyHeart → BigArms
     • Context accumulation  — each step sees prior step results
     • Synthesis             — final call produces the answer for the user
     """
@@ -45,10 +47,12 @@ class StepExecutor:
         model_client,
         logger,
         max_tokens: int = 1024,
+        bloodyheart_adapter=None,
     ):
         self.model_client = model_client
         self.logger = logger
         self.max_tokens = max_tokens
+        self.bloodyheart_adapter = bloodyheart_adapter
 
     async def execute(
         self,
@@ -126,18 +130,117 @@ class StepExecutor:
             })
 
             try:
-                result = await self.model_client.complete(
-                    messages=step_messages,
-                    system_prompt=_STEP_SYSTEM_PROMPT,
-                    temperature=0.4,
-                    max_tokens=self.max_tokens,
-                )
+                # === Tool Execution Path via BloodyHeart (GhostMind → BloodyHeart → BigArms) ===
+                if task.requires_tools and self.bloodyheart_adapter is not None:
+                    start_time = time.perf_counter()
 
-                self.logger.info(
-                    "step_complete",
-                    step=i,
-                    task_id=task.id,
-                )
+                    self.logger.info(
+                        "cross_layer_tool_call_start",
+                        step=i,
+                        task_id=task.id,
+                        tool_name=task.tool_scope or task.title,
+                        risk_level=task.risk_level,
+                    )
+
+                    # Build rich context/arguments for BloodyHeart + BigArms
+                    tool_args = {
+                        "task_id": task.id,
+                        "title": task.title,
+                        "description": task.description,
+                        "original_user_request": user_input,
+                        "risk_level": task.risk_level,
+                        "priority": task.priority,
+                        "estimated_steps": task.estimated_steps,
+                        "dependencies": task.dependencies,
+                    }
+
+                    # Include recent previous step results for context
+                    if step_results:
+                        tool_args["previous_step_results"] = [
+                            {
+                                "step": r.get("step"),
+                                "title": r.get("title"),
+                                "result_summary": str(r.get("result", ""))[:1500],
+                            }
+                            for r in step_results[-3:]
+                        ]
+
+                    # Create child trace context for distributed tracing
+                    current_trace = getattr(self, "_current_trace_context", None)
+                    if current_trace is None:
+                        from tracing import TraceContext
+                        current_trace = TraceContext.new()
+                        self._current_trace_context = current_trace
+
+                    child_trace = current_trace.child(f"tool.{task.tool_scope or task.title}")
+
+                    # Measure full cross-layer roundtrip (GhostMind → BloodyHeart → BigArms → response)
+                    tool_call_start = time.perf_counter()
+
+                    tool_result = await self.bloodyheart_adapter.execute_tool(
+                        tool_name=task.tool_scope or task.title,
+                        tool_version="1.0",
+                        args=tool_args,
+                        granted_capabilities=[],
+                        correlation_id=task.id,
+                        timeout=180.0,
+                        trace_context=child_trace,
+                    )
+
+                    cross_layer_roundtrip_ms = (time.perf_counter() - tool_call_start) * 1000
+                    duration_ms = (time.perf_counter() - start_time) * 1000
+                    success = bool(tool_result.get("success", True)) if isinstance(tool_result, dict) else True
+                    result = (
+                        tool_result.get("stdout")
+                        or tool_result.get("result_data")
+                        or tool_result.get("structured_output")
+                        or str(tool_result)
+                    )
+
+                    # Logging + Metrics
+                    self.logger.info(
+                        "cross_layer_tool_call_complete",
+                        step=i,
+                        task_id=task.id,
+                        tool_name=task.tool_scope or task.title,
+                        success=success,
+                        duration_ms=round(duration_ms, 1),
+                        cross_layer_roundtrip_ms=round(cross_layer_roundtrip_ms, 1),
+                        result_length=len(str(result)) if result else 0,
+                    )
+
+                    # Simple in-memory metrics on the executor instance
+                    if not hasattr(self, "_bloodyheart_tool_metrics"):
+                        self._bloodyheart_tool_metrics = {
+                            "total_calls": 0,
+                            "successful": 0,
+                            "failed": 0,
+                            "total_duration_ms": 0.0,
+                        }
+
+                    metrics = self._bloodyheart_tool_metrics
+                    metrics["total_calls"] += 1
+                    metrics["total_duration_ms"] += duration_ms
+                    metrics["cross_layer_roundtrip_ms"] = metrics.get("cross_layer_roundtrip_ms", 0) + cross_layer_roundtrip_ms
+                    if success:
+                        metrics["successful"] += 1
+                    else:
+                        metrics["failed"] += 1
+
+                else:
+                    # === Standard LLM Reasoning Step ===
+                    result = await self.model_client.complete(
+                        messages=step_messages,
+                        system_prompt=_STEP_SYSTEM_PROMPT,
+                        temperature=0.4,
+                        max_tokens=self.max_tokens,
+                    )
+
+                    self.logger.info(
+                        "step_complete",
+                        step=i,
+                        task_id=task.id,
+                    )
 
             except Exception as e:
                 result = f"[Step {i} error: {type(e).__name__}: {e}]"
@@ -161,6 +264,15 @@ class StepExecutor:
             base_messages=base_messages,
             user_input=user_input,
         )
+
+    def get_bloodyheart_metrics(self) -> dict:
+        """Return metrics for cross-layer tool calls via BloodyHeart (GhostMind → BloodyHeart → BigArms)."""
+        metrics = getattr(self, "_bloodyheart_tool_metrics", {})
+        if "cross_layer_roundtrip_ms" in metrics and metrics["total_calls"] > 0:
+            metrics["avg_cross_layer_roundtrip_ms"] = round(
+                metrics["cross_layer_roundtrip_ms"] / metrics["total_calls"], 1
+            )
+        return metrics
 
     async def _synthesize(
         self,
